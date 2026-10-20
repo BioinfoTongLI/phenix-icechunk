@@ -26,6 +26,11 @@ dependencies = [
     "xarray>=2025.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/BioinfoTongLI/phenix-icechunk"
+Source = "https://github.com/BioinfoTongLI/phenix-icechunk"
+Issues = "https://github.com/BioinfoTongLI/phenix-icechunk/issues"
+
 [project.optional-dependencies]
 # pandas: read_table() returns a DataFrame; dask: open_field(chunks={}); ome-types: OME-XML validation.
 extras = ["pandas", "ome-types", "dask"]
