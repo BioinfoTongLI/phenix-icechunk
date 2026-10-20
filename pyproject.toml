@@ -1,0 +1,49 @@
+[project]
+name = "phenix-icechunk"
+version = "0.1.0"
+description = "Expose an Opera Phenix / Harmony Index.xml export as a virtual OME-Zarr plate in an icechunk repo"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tong Li", email = "tl10@sanger.ac.uk" }]
+requires-python = ">=3.12"
+keywords = ["opera-phenix", "harmony", "ome-zarr", "icechunk", "high-content-screening", "microscopy"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "icechunk>=2.3",
+    "zarr>=3.4",
+    "tifffile",
+    "imagecodecs",
+    "numpy",
+    "pyyaml",
+    "xarray>=2025.1",
+]
+
+[project.optional-dependencies]
+# pandas: read_table() returns a DataFrame; dask: open_field(chunks={}); ome-types: OME-XML validation.
+extras = ["pandas", "ome-types", "dask"]
+
+[project.scripts]
+phenix-icechunk = "phenix_icechunk.cli:main"
+
+# Lets any zarr-python reader in this env decode the chunks without importing this package.
+[project.entry-points."zarr.codecs"]
+phenix_tiff_strip = "phenix_icechunk.codec:TiffStripCodec"
+imagecodecs_tiff = "imagecodecs.zarr:Tiff"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/phenix_icechunk"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/phenix_icechunk", "README.md", "LICENSE", "pyproject.toml"]
