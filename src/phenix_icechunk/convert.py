@@ -3,11 +3,14 @@
 No pixel data is copied.  Every zarr chunk is an icechunk *virtual reference*
 to a byte range inside one of the original TIFFs:
 
-* ``chunking="plane"`` (default): one chunk per plane referencing the *whole*
-  TIFF file, decoded in memory by imagecodecs' ``imagecodecs_tiff`` codec.
-  One large read per plane is what NFS-backed exports are fastest at.
-* ``chunking="strip"``: one chunk per TIFF strip, decoded by ``TiffStripCodec``.
-  ~18x more (smaller) requests, but a sub-region read only touches its strips.
+* ``chunking="auto"`` (default): ``"tile"`` for tiled exports (newer Harmony exports
+  write 512x512 tiles), ``"plane"`` for strip exports.
+* ``chunking="plane"``: one chunk per plane referencing the *whole* TIFF file,
+  decoded in memory by imagecodecs' ``imagecodecs_tiff`` codec. One large read per
+  plane is what NFS-backed exports are fastest at for full-field reads.
+* ``chunking="strip"`` (alias ``"tile"``): one chunk per TIFF strip *or* tile, whichever
+  the files use, decoded by ``TiffStripCodec``. ~18-25x more (smaller) requests, but
+  a sub-region read only touches its blocks.
 * Uncompressed TIFFs with back-to-back strips always use one chunk per plane
   pointing at the pixel bytes, with the standard ``bytes`` codec.
 
@@ -68,7 +71,9 @@ class TiffLayout:
     compression: str
     predictor: int
     endian: str
-    rows_per_strip: int
+    tiled: bool
+    # (rows, cols) of one TIFF strip or tile: the chunk shape in strip/tile mode
+    block_shape: tuple[int, int]
     contiguous: bool
 
 
@@ -90,8 +95,6 @@ def scan_tiff(path: Path) -> TiffStrips:
     st = os.stat(path)
     with tifffile.TiffFile(path) as tif:
         page = tif.pages.first
-        if page.is_tiled:
-            raise ValueError(f"{path}: tiled TIFFs are not supported")
         if page.samplesperpixel != 1:
             raise ValueError(f"{path}: expected 1 sample per pixel, got {page.samplesperpixel}")
         compression = TIFF_COMPRESSION.get(int(page.compression))
@@ -103,8 +106,19 @@ def scan_tiff(path: Path) -> TiffStrips:
             compression=compression,
             predictor=int(page.predictor),
             endian="little" if tif.byteorder == "<" else "big",
-            rows_per_strip=min(page.rowsperstrip, page.imagelength),
-            contiguous=compression == "none" and int(page.predictor) == 1 and bool(page.is_contiguous),
+            tiled=page.is_tiled,
+            block_shape=(
+                (page.tilelength, page.tilewidth)
+                if page.is_tiled
+                else (min(page.rowsperstrip, page.imagelength), page.imagewidth)
+            ),
+            # back-to-back strips == plain row-major pixels; tiles never are
+            contiguous=(
+                not page.is_tiled
+                and compression == "none"
+                and int(page.predictor) == 1
+                and bool(page.is_contiguous)
+            ),
         )
         tags = tiff_tags(page)
         tags["n_pages"] = len(tif.pages)
@@ -291,7 +305,7 @@ def convert(
     *,
     workers: int = 32,
     container_prefix: str | None = None,
-    chunking: Literal["plane", "strip"] = "plane",
+    chunking: Literal["auto", "plane", "strip", "tile"] = "auto",
     flatfield: bool = False,
     zproject: str | None = None,
     ome_tiff_dir: str | Path | None = None,
@@ -368,17 +382,21 @@ def convert(
         by_field[(im.row, im.col, im.field)].append(im)
 
     ny, nx = layout.shape
+    if chunking == "auto":
+        chunking = "tile" if layout.tiled else "plane"
+        log.info("chunking=auto -> %s (%s TIFFs)", chunking, "tiled" if layout.tiled else "strip")
     if layout.contiguous:
-        mode, chunk_y, serializer = "pixels", ny, BytesCodec(endian=layout.endian)
+        mode, chunk_yx, serializer = "pixels", (ny, nx), BytesCodec(endian=layout.endian)
     elif chunking == "plane":
-        mode, chunk_y, serializer = "file", ny, TiffCodec()
-    elif chunking == "strip":
-        mode, chunk_y = "strip", layout.rows_per_strip
+        mode, chunk_yx, serializer = "file", (ny, nx), TiffCodec()
+    elif chunking in ("strip", "tile"):
+        mode, chunk_yx = ("tile" if layout.tiled else "strip"), layout.block_shape
         serializer = TiffStripCodec(
             compression=layout.compression, predictor=layout.predictor, endian=layout.endian
         )
     else:
-        raise ValueError(f"chunking must be 'plane' or 'strip', got {chunking!r}")
+        raise ValueError(f"chunking must be 'auto', 'plane', 'strip' or 'tile', got {chunking!r}")
+    blocks_across = -(-nx // chunk_yx[1])
     shape = (len(timepoint_ids), len(channel_ids), len(plane_ids), ny, nx)
 
     repo_path = Path(repo_path)
@@ -530,7 +548,7 @@ def convert(
             image.create_array(
                 "0",
                 shape=shape,
-                chunks=(1, 1, 1, chunk_y, nx),
+                chunks=(1, 1, 1, *chunk_yx),
                 dtype=layout.dtype,
                 serializer=serializer,
                 compressors=None,
@@ -561,9 +579,11 @@ def convert(
                         )
                     )
                 else:
+                    # TIFF blocks are row-major; edge tiles are padded to full size and
+                    # zarr clips the padding, the short last strip is padded by the codec
                     specs.extend(
                         ic.VirtualChunkSpec(
-                            [t, ch, z, k, 0], location, off, n,
+                            [t, ch, z, *divmod(k, blocks_across)], location, off, n,
                             last_updated_at_checksum=s.last_modified,
                         )
                         for k, (off, n) in enumerate(zip(s.offsets, s.counts, strict=True))
@@ -658,7 +678,7 @@ def convert(
         "wells": len(wells),
         "fields": len(by_field),
         "array_shape": shape,
-        "chunk_shape": (1, 1, 1, chunk_y, nx),
+        "chunk_shape": (1, 1, 1, *chunk_yx),
         "chunk_refs": mode,
         "virtual_refs": n_refs,
         "missing_tiffs": n_missing,

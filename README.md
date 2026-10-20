@@ -32,7 +32,7 @@ uv pip install --python .venv/bin/python -e .
 | `--ome-tiff DIR` | Also write one OME-TIFF per well to `DIR` (see below) |
 | `--ome-tiff-data auto\|stack\|zproject\|both` | What `--ome-tiff` writes. `auto` (default) = the projection if `--zproject` is given, else the z stacks |
 | `--ome-tiff-compression zlib\|lzw\|none` | Tile compression of the OME-TIFFs (default `zlib`, level 1) |
-| `--chunking plane\|strip` | Virtual chunk layout (default `plane`, see "How it works") |
+| `--chunking auto\|plane\|strip\|tile` | Virtual chunk layout (see "How it works"). Default `auto` = `tile` for tiled exports, `plane` for strip exports. `strip` and `tile` are the same mode |
 | `--workers N` | Threads for the TIFF header scan (default 32) |
 | `--container-prefix URL` | `file://` prefix for the virtual chunk container (default: deepest URL-safe parent) |
 | `--overwrite` | Replace an existing repo / OME-TIFFs |
@@ -193,12 +193,17 @@ Only the pixel strip offsets are not stored as metadata, because they *are* the 
   one `(t, c, z, y, x)` array with OME-Zarr `multiscales` (scale from `ImageResolution`, z step
   from `PositionZ`, translation from stage position: x = +stageX, y = −stageY).
 * TIFF headers are scanned in parallel (about 3 ms per file on /nfs) to get strip offsets and file sizes.
-* **plane** chunking (default): one chunk per plane, referencing the whole TIFF file and
+* Harmony writes two TIFF layouts, and both are supported:
+  * LZW **strips**, e.g. 18 strips of 122 rows (OT_NIM).
+  * LZW **512×512 tiles** in newer exports, e.g. 25 tiles per 2160² plane (large_GBM).
+* `--chunking auto` (default) picks **tile** for tiled exports and **plane** for strip exports.
+* **plane** chunking: one chunk per plane, referencing the whole TIFF file and
   decoded by imagecodecs' `imagecodecs_tiff` codec (libtiff). That is one large read per plane,
-  which is what NFS serves fastest.
-* **strip** chunking: one chunk per TIFF strip (122 rows here), decoded by the bundled
-  `phenix_tiff_strip` codec, which zero-pads the short last strip. Partial reads touch fewer
-  bytes, but the request count goes up about 18×.
+  which is what NFS serves fastest, and it works the same for strips and tiles.
+* **strip / tile** chunking: one chunk per TIFF strip or tile, whichever the files use, decoded
+  by the bundled `phenix_tiff_strip` codec. The short last strip is zero-padded by the codec,
+  and padded edge tiles are clipped by zarr. Partial reads touch fewer bytes, but the request
+  count goes up 18–25×.
 * Uncompressed TIFFs with contiguous strips get a plain `bytes`-codec chunk per plane.
 * Each reference stores the TIFF's mtime, so icechunk raises an error rather than return wrong
   pixels if a source file is rewritten.

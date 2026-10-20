@@ -19,10 +19,12 @@ def main() -> None:
     )
     p.add_argument(
         "--chunking",
-        choices=("plane", "strip"),
-        default="plane",
-        help="plane: one whole-TIFF read per plane (fastest full-plane reads); "
-        "strip: one chunk per TIFF strip (cheaper small-ROI reads)",
+        choices=("auto", "plane", "strip", "tile"),
+        default="auto",
+        help="auto (default): tile for tiled exports, plane for strip exports; "
+        "plane: one whole-TIFF read per plane (fastest full-plane reads); "
+        "strip/tile (same thing): one chunk per TIFF strip or tile, whichever the files use "
+        "(cheaper small-ROI reads)",
     )
     p.add_argument(
         "--flatfield",

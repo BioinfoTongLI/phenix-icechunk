@@ -49,7 +49,12 @@ TIFF_COMPRESSION = {1: "none", 5: "lzw", 8: "deflate", 32946: "deflate", 50000: 
 
 @dataclass(frozen=True)
 class TiffStripCodec(ArrayBytesCodec):
-    """Array <-> bytes codec for one TIFF strip (chunk = ``(..., rows_per_strip, width)``)."""
+    """Array <-> bytes codec for one TIFF strip or tile.
+
+    Chunk = ``(..., rows_per_strip, width)`` for strips or ``(..., tile_length, tile_width)``
+    for tiles. A tile's bytes are ``tile_length`` full rows of ``tile_width`` pixels (edge tiles
+    are padded by the TIFF writer), so both decode the same way.
+    """
 
     is_fixed_size = False
 
