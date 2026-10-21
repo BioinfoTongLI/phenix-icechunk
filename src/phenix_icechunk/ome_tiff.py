@@ -191,7 +191,8 @@ def export_ome_tiff(
             )
             # OME-TIFF allows a UTF-8 ImageDescription. Passing bytes skips tifffile's ASCII
             # check. Character references ("&#181;m") are not an option: Bio-Formats mangles them.
-            description = xml.encode("utf-8")
+            # Kept apart from `description`, which every well's <Image><Description> reuses.
+            xml_bytes = xml.encode("utf-8")
 
             def read(group: str) -> np.ndarray:
                 if zproject is not None:
@@ -216,7 +217,7 @@ def export_ome_tiff(
                             compression=codec,
                             compressionargs=codec_args,
                             maxworkers=os.cpu_count(),
-                            description=description if k == 0 else None,
+                            description=xml_bytes if k == 0 else None,
                             metadata=None,
                             software=f"phenix-icechunk {version}",
                         )
