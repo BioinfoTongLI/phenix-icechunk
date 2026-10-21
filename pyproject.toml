@@ -1,6 +1,6 @@
 [project]
 name = "phenix-icechunk"
-version = "0.2.0"
+version = "0.3.0"
 description = "Expose an Opera Phenix / Harmony Index.xml export as a virtual OME-Zarr plate in an icechunk repo"
 readme = "README.md"
 license = "MIT"
