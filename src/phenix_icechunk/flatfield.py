@@ -17,6 +17,7 @@ intensities keep their original scale.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -29,7 +30,11 @@ import zarr
 from xarray.backends import BackendArray
 from xarray.core import indexing
 
+log = logging.getLogger(__name__)
+
 PROFILE_KEY = "Background"
+# stored type of flatfield-corrected and max/min-projected pixels (repo projections, OME-TIFF)
+OUTPUT_DTYPE = np.dtype(np.uint16)
 _POOL = ThreadPoolExecutor(max_workers=os.cpu_count() or 4, thread_name_prefix="flatfield")
 
 
@@ -54,6 +59,22 @@ def profile_image(profile: dict[str, Any], shape: tuple[int, int], key: str = PR
         for j, c in enumerate(row):
             out += c * np.outer(v**j, u ** (k - j))
     return (out / out.mean()).astype(np.float32)
+
+
+def to_dtype(values: np.ndarray, dtype: np.dtype = OUTPUT_DTYPE) -> np.ndarray:
+    """Corrected or projected pixels to ``dtype``; integer targets are rounded and clipped."""
+    dtype = np.dtype(dtype)
+    if values.dtype == dtype:
+        return values
+    if dtype.kind in "ui":
+        info = np.iinfo(dtype)
+        clipped = np.count_nonzero((values > info.max) | (values < info.min))
+        if clipped:
+            log.warning("%d pixels outside the %s range clipped to [%d, %d]", clipped, dtype, info.min, info.max)
+        if values.dtype.kind == "f":
+            values = np.rint(values)
+        values = np.clip(values, info.min, info.max)
+    return values.astype(dtype)
 
 
 def _channel_profiles(plate: zarr.Group) -> list[tuple[str, dict[str, Any] | None]]:

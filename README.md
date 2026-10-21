@@ -121,9 +121,9 @@ tree = open_datatree(plate, zproject="max")
   needs `overwrite=True`, and the old version stays in history.
 * Order: `project(flatfield(raw))`. The stored projection already has the correction, so
   `open_field(..., zproject=...)` refuses a conflicting `flatfield=` argument.
-* dtype: `max`/`min` of raw planes stay `uint16`. With flatfield, or for
-  `mean/median/sum/std`, the result is `float32`. For this plate the float32 max projection takes 3.3 GB
-  in the repo and took 40 s to compute.
+* dtype: `max`/`min` are stored as `uint16` (rounded and clipped, with or without flatfield);
+  `mean/median/sum/std` are `float32`. A warning is logged if any pixel exceeds the `uint16`
+  range. For this plate the max projection took 40 s to compute (3.3 GB in the repo as float32).
 
 ### OME-TIFF export (Bio-Formats / Fiji / QuPath / OMERO)
 
@@ -142,7 +142,8 @@ The output is one `<plate>_<well>.ome.tiff` per well:
   channels (names, wavelengths, modes, colours), every Plane (ΔT, exposure, XYZ), StageLabel,
   ImagingEnvironment, instrument, and assay-layout/channel MapAnnotations. It is the
   same document as `/OME/METADATA.ome.xml`, restricted to the well, plus `TiffData` per image.
-* With flatfield, corrected pixels are rounded and clipped back to `uint16`.
+* Pixels are `uint16`. With flatfield, corrected pixels are rounded and clipped to `uint16`;
+  `zproject=` exports use the projection's stored dtype (`uint16` for `max`/`min`).
 
 Checked with Bio-Formats 8.1.1 `showinf`: the file opens as OME-TIFF with 56 series of
 Z=12 × C=4 × 2160², and the plate/well/well-sample positions are parsed. Planes extracted with

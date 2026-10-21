@@ -7,7 +7,8 @@ wells and fields as the root plate and ``z`` of size 1::
     /projections/zmax/<row>/<col>/<field>/0   (t, c, 1, y, x)
 
 The projection is ``reduce_z(flatfield(raw))`` when flatfield correction is on, so
-it is computed *after* the correction. It is committed separately from the virtual
+it is computed *after* the correction. ``max``/``min`` are stored as ``uint16``
+(rounded, clipped), the other methods as ``float32``. It is committed separately from the virtual
 plate: the commit holds only the projection plus the root ``phenix.projections``
 entry, and a failed or repeated projection never touches the plate itself.
 """
@@ -27,6 +28,7 @@ import numpy as np
 import zarr
 
 from .convert import open_repo
+from .flatfield import OUTPUT_DTYPE, to_dtype
 from .xarray_io import open_field
 
 log = logging.getLogger(__name__)
@@ -39,8 +41,8 @@ METHODS: dict[str, Callable[..., np.ndarray]] = {
     "sum": np.sum,
     "std": np.std,
 }
-# methods whose result keeps the input dtype (others are float32)
-_DTYPE_PRESERVING = {"max", "min"}
+# methods stored as OUTPUT_DTYPE (others are float32)
+_INTEGER_OUT = {"max", "min"}
 
 
 def projection_path(method: str) -> str:
@@ -50,21 +52,26 @@ def projection_path(method: str) -> str:
 def _project(data: np.ndarray, method: str, pool: ThreadPoolExecutor) -> np.ndarray:
     """(t, c, z, y, x) -> (t, c, 1, y, x), one (t, c) stack per thread."""
     func = METHODS[method]
-    float_out = data.dtype.kind == "f" or method not in _DTYPE_PRESERVING
-    out = np.empty((*data.shape[:2], 1, *data.shape[3:]), dtype=np.float32 if float_out else data.dtype)
+    integer_out = method in _INTEGER_OUT
+    out = np.empty((*data.shape[:2], 1, *data.shape[3:]), dtype=OUTPUT_DTYPE if integer_out else np.float32)
 
     def one(tc: tuple[int, int]) -> None:
         t, c = tc
         stack = data[t, c]
         kwargs = {"dtype": np.float32} if method in ("mean", "sum", "std") else {}
-        out[t, c, 0] = func(stack, axis=0, **kwargs)
+        projected = func(stack, axis=0, **kwargs)
+        out[t, c, 0] = to_dtype(projected, out.dtype) if integer_out else projected
 
     list(pool.map(one, product(range(data.shape[0]), range(data.shape[1]))))
     return out
 
 
-def _field_attrs(src: dict[str, Any], method: str, info: dict[str, Any]) -> dict[str, Any]:
+def _field_attrs(src: dict[str, Any], method: str, info: dict[str, Any], dtype: np.dtype) -> dict[str, Any]:
     attrs = copy.deepcopy(src)
+    if dtype.kind in "ui":  # the source window is for the raw dtype
+        dmin, dmax = int(np.iinfo(dtype).min), int(np.iinfo(dtype).max)
+        for ch in attrs["ome"].get("omero", {}).get("channels", []):
+            ch["window"] = {"min": dmin, "max": dmax, "start": 0, "end": dmax}
     ms = attrs["ome"]["multiscales"][0]
     ms["name"] = f"{ms['name']} z{method}"
     ms["metadata"] = {"description": f"z {method} projection", **info}
@@ -149,7 +156,9 @@ def zproject(
             out_dtype = projected.dtype
             group = dest[well_path].create_group(
                 field,
-                attributes=_field_attrs(dict(source[f"{well_path}/{field}"].attrs), method, info | {"n_planes": n_planes}),
+                attributes=_field_attrs(
+                    dict(source[f"{well_path}/{field}"].attrs), method, info | {"n_planes": n_planes}, projected.dtype
+                ),
             )
             arr = group.create_array(
                 "0",

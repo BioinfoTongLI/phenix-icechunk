@@ -30,6 +30,7 @@ import tifffile
 import zarr
 
 from .convert import _row_name, open_plate
+from .flatfield import OUTPUT_DTYPE, to_dtype
 from .index_xml import PhenixIndex, parse_index
 from .metadata import read_file
 from .ome_xml import PIXEL_TYPES, OmeField, build_ome_xml
@@ -113,16 +114,6 @@ def _load_context(plate: zarr.Group) -> _PlateContext:
     )
 
 
-def _as_dtype(values: np.ndarray, dtype: np.dtype) -> np.ndarray:
-    """Flatfield-corrected float32 back to the source integer type (rounded, clipped)."""
-    if values.dtype == dtype:
-        return values
-    if dtype.kind in "ui":
-        info = np.iinfo(dtype)
-        values = np.clip(np.rint(values), info.min, info.max)
-    return values.astype(dtype)
-
-
 def export_ome_tiff(
     source: str | Path | zarr.Group,
     out_dir: str | Path,
@@ -136,7 +127,8 @@ def export_ome_tiff(
     """Write one multi-series OME-TIFF per well into ``out_dir``.
 
     ``flatfield=None`` follows the repo default (``convert(..., flatfield=True)``).
-    Corrected pixels are rounded and clipped back to the source dtype.
+    Raw stacks keep the source dtype; flatfield-corrected pixels are rounded and clipped
+    to ``uint16``.
     ``zproject="max"`` exports that stored projection instead of the z stacks
     (``<plate>_<well>_zmax.ome.tiff``, SizeZ=1, in the projection's own dtype).
     """
@@ -158,8 +150,11 @@ def export_ome_tiff(
         description = f"Z {zproject} projection of {projection['n_planes']} planes" + (
             ", flatfield-corrected before projection" if flatfield else ""
         )
-    elif flatfield is None:
-        flatfield = bool(plate.attrs["phenix"].get("flatfield_default", False))
+    else:
+        if flatfield is None:
+            flatfield = bool(plate.attrs["phenix"].get("flatfield_default", False))
+        if flatfield:
+            out_dtype = OUTPUT_DTYPE
     codec, codec_args = _COMPRESSION[compression]
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +198,7 @@ def export_ome_tiff(
                     da = open_field(plate, well_path, group, zproject=zproject)
                 else:
                     da = open_field(plate, well_path, group, flatfield=flatfield)
-                return _as_dtype(da.values, out_dtype)
+                return to_dtype(da.values, out_dtype)
 
             partial = path.with_name(name + ".part")
             # Read field k+1 while field k is compressed and written.
