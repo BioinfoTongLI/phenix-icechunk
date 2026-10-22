@@ -29,6 +29,7 @@ import zarr
 
 from .convert import open_repo
 from .flatfield import OUTPUT_DTYPE, to_dtype
+from .sharding import shards_for
 from .xarray_io import open_field
 
 log = logging.getLogger(__name__)
@@ -160,10 +161,12 @@ def zproject(
                     dict(source[f"{well_path}/{field}"].attrs), method, info | {"n_planes": n_planes}, projected.dtype
                 ),
             )
+            chunks = (1, 1, 1, *projected.shape[3:])
             arr = group.create_array(
                 "0",
                 shape=projected.shape,
-                chunks=(1, 1, 1, *projected.shape[3:]),
+                chunks=chunks,
+                shards=shards_for(projected.shape, chunks, projected.dtype.itemsize),
                 dtype=projected.dtype,
                 fill_value=0,
                 dimension_names=("t", "c", "z", "y", "x"),

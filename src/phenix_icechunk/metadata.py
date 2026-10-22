@@ -20,6 +20,7 @@ import numpy as np
 import zarr
 
 from .index_xml import flatten, local_name
+from .sharding import shards_for
 
 # StripOffsets / StripByteCounts become the virtual chunk refs themselves.
 _SKIP_TAGS = {273, 279}
@@ -101,10 +102,16 @@ def write_table(
     for name in columns:
         data = _column([row.get(name) for row in rows])
         is_str = data.dtype == object
+        # vlen strings: mean UTF-8 length plus the 4-byte length prefix
+        itemsize = (
+            4 + sum(len(v.encode()) for v in data) / max(1, len(data)) if is_str else data.dtype.itemsize
+        )
+        chunks = (max(1, min(len(data), _TABLE_CHUNK)),)
         arr = group.create_array(
             name,
             shape=data.shape,
-            chunks=(max(1, min(len(data), _TABLE_CHUNK)),),
+            chunks=chunks,
+            shards=shards_for(data.shape, chunks, itemsize),
             dtype=str if is_str else data.dtype,
             fill_value="" if is_str else (np.nan if data.dtype.kind == "f" else 0),
         )
@@ -125,10 +132,12 @@ def write_table(
 
 def write_file(group: zarr.Group, node: str, data: bytes, info: dict[str, Any]) -> None:
     """Store a file's exact bytes at ``group[node]``; read back with :func:`read_file`."""
+    chunks = (max(1, min(len(data), _FILE_CHUNK)),)
     arr = group.create_array(
         node,
         shape=(len(data),),
-        chunks=(max(1, min(len(data), _FILE_CHUNK)),),
+        chunks=chunks,
+        shards=shards_for((len(data),), chunks, 1),
         dtype="uint8",
         fill_value=0,
     )

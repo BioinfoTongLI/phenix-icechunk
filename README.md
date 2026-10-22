@@ -124,6 +124,10 @@ tree = open_datatree(plate, zproject="max")
 * dtype: `max`/`min` are stored as `uint16` (rounded and clipped, with or without flatfield);
   `mean/median/sum/std` are `float32`. A warning is logged if any pixel exceeds the `uint16`
   range. For this plate the max projection took 40 s to compute (3.3 GB in the repo as float32).
+* Chunks are one (y, x) plane, grouped into zarr v3 shards of about 50 MB uncompressed
+  (whole channels/timepoints, never more than the field's array). Stored tables and files
+  are sharded the same way. The virtual pixel arrays are not sharded, since each of their
+  chunks is a byte range of a TIFF.
 
 ### OME-TIFF export (Bio-Formats / Fiji / QuPath / OMERO)
 
